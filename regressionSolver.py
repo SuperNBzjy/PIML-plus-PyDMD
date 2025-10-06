@@ -1,173 +1,164 @@
+"""Regression workflows for physics-informed turbulence modeling.
 
-# coding: utf-8
+This module retains the original functionality of the notebook-exported
+``regressionSolver.py`` script while making it executable as a regular Python
+module.  The implementation focuses on Step 4 of the PIML algorithm, where a
+regression model is trained to map flow features to Reynolds stress
+discrepancies.
+"""
+from __future__ import annotations
 
-# In[1]:
-
-
-from IPython.display import Image
-
-
-# # Overview
-# This code implements the PIML regresson procedure described in Wang et al. 2017, with the case of flow over periodic hills as example. 
-# 
-# * J.-X. Wang, J.-L. Wu, and H. Xiao. Physics informed machine learning approach for reconstructing Reynolds stress modeling discrepancies based on DNS data. Physical Review Fluids. 2(3), 034603, 1-22, 2017. https://doi.org/10.1103/PhysRevFluids.2.034603[DOI:10.1103/PhysRevFluids.2.034603]
-
-# # Algorithm of PIML-Based Turbulence Modeling
-# The overall procedure can be summarized as follows:
-# 
-# 1. Perform baseline RANS simulations on both the training flows and the test flow.
-# 1. Compute the input feature field $\mathbf{q}(\mathbf{x})$ based on the local 
-#  	RANS flow variables. 
-# 1. Compute the discrepancies field $\Delta \boldsymbol{\tau}(\mathbf{x})$ in the RANS-modeled 
-#  	Reynolds stresses for the training flows based on the high-fidelity data.
-# 1. **Construct regression functions $ f: \mathbf{q} \mapsto \Delta \boldsymbol{\tau}$ for the
-#  	discrepancies based on the training data prepared in Step 3, using machine learning algorithms.**
-# 1. Compute the Reynolds stress discrepancies for the test flow by querying the regression
-#  	functions. The Reynolds stresses can subsequently be obtained by correcting the baseline RANS 
-#  	predictions with the evaluated discrepancies.
-# 1. Propagate the corrected Reynolds stresses to the mean velocity field by solving the RANS 
-#  	equations with the corrected Reynolds stress field.
-# 
-# 
-# **This code only performs Step 4.** (see the green-shaded box below in the flow chart). The training data prepared in Steps 1-3 are saved in _database_ folder.
-# 
-
-# In[2]:
-
-
-Image(filename='figs/PIML-algorithm.png')
-
-
-# # Machine learning algorithms
-# 
-# The procedure implented here consists of three parts:
-# 
-# 1. load training and test data
-# 2. construct regression function $\Delta \boldsymbol{\tau} (\mathbf{q})$ (detailed below)
-# 3. plot the anisotropy parameters $\xi$ and $\eta$ (componebnts of $\Delta \boldsymbol{\tau}$) and compare with ground truth (DNS)
-# 
-# We used two algorithms to build the regression function: 
-# 
-# * Random Forests (based on scikit-learn). This is what was used in Wang et al.
-# * Neural networks (based on Tensorflow)
-# 
-# Both algorithms yielded similar results, but the former is cheaper computationally.
-
-# The input features consist of 12 variables (see Table 1 below and also Wang et al.)
-
-# In[3]:
-
-
-Image(filename='figs/features.png')
-
-
-# In[4]:
-
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-## Import system modules
-# sci computing
-import numpy as np
-# sklearn importing
-from sklearn.ensemble.forest import RandomForestRegressor
-# plotting
-import matplotlib.pyplot as plt  # for plotting
-#import matplotlib as mp
-
-# keras importing
-from keras.models import Sequential
-from keras.layers import Dense
-
+import importlib.util
 import time
+from pathlib import Path
+from typing import Iterable, Tuple
+
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+
+# Optional IPython support ----------------------------------------------------
+_IPYTHON_SPEC = importlib.util.find_spec("IPython")
+if _IPYTHON_SPEC is not None:
+    from IPython import get_ipython as _get_ipython  # type: ignore
+    from IPython.display import Image  # type: ignore
+else:  # pragma: no cover - exercised only when IPython is missing
+    def _get_ipython():  # type: ignore
+        return None
+
+    def Image(*_args, **_kwargs):  # type: ignore
+        return None
+
+_ipy_shell = _get_ipython()
+if _ipy_shell is not None:
+    _ipy_shell.run_line_magic("matplotlib", "inline")
+else:  # pragma: no cover - covered implicitly when running tests
+    matplotlib.use("Agg")
+
+# Optional Keras support ------------------------------------------------------
+_KERAS_SPEC = importlib.util.find_spec("keras")
+if _KERAS_SPEC is not None:
+    from keras.layers import Dense  # type: ignore
+    from keras.models import Sequential  # type: ignore
+else:  # pragma: no cover - executed when Keras is unavailable
+    Dense = None  # type: ignore
+    Sequential = None  # type: ignore
+
+# Paths -----------------------------------------------------------------------
+REPO_ROOT = Path(__file__).resolve().parent
+DATABASE_ROOT = REPO_ROOT / "database"
+FIGURES_ROOT = REPO_ROOT / "figs"
 
 
-# In[5]:
+def _load_matrix(path: Path) -> np.ndarray:
+    """Load a whitespace separated matrix stored in ``path``."""
+    return np.loadtxt(path)
 
 
-def loadTrainingData(caseName, ReNum):
-    trainFeaturesFile = './database/' + caseName + '/markers/' + ReNum + '/markerFile'
-    trainResponsesFile = './database/' + caseName + '/deltaFields/' + ReNum + '/deltaField'
-    trainFeatures = np.loadtxt(trainFeaturesFile)
-    trainResponses = np.loadtxt(trainResponsesFile)
-    return trainFeatures, trainResponses
+def loadTrainingData(caseName: str, ReNum: str) -> Tuple[np.ndarray, np.ndarray]:
+    """Load training features and responses for the specified flow case."""
+    base = DATABASE_ROOT / caseName
+    trainFeaturesFile = base / "markers" / ReNum / "markerFile"
+    trainResponsesFile = base / "deltaFields" / ReNum / "deltaField"
+    return _load_matrix(trainFeaturesFile), _load_matrix(trainResponsesFile)
 
 
-# In[6]:
+def loadTestData(caseName: str, ReNum: str) -> Tuple[np.ndarray, np.ndarray]:
+    """Load test features and responses for the specified flow case."""
+    base = DATABASE_ROOT / caseName
+    testFeaturesFile = base / "markers" / ReNum / "markerFile"
+    testResponsesFile = base / "deltaFields" / ReNum / "deltaField"
+    return _load_matrix(testFeaturesFile), _load_matrix(testResponsesFile)
 
 
-def loadTestData(caseName, ReNum):
-    testFeaturesFile = './database/' + caseName + '/markers/' + ReNum + '/markerFile'
-    testResponsesFile = './database/' + caseName + '/deltaFields/' + ReNum + '/deltaField'
-    testFeatures = np.loadtxt(testFeaturesFile)
-    testResponses = np.loadtxt(testResponsesFile)
-    return testFeatures, testResponses
-
-
-# In[7]:
-
-
-def randomForest(trainFeatures, trainResponses, testFeatures, maxFeatures = 'log2', nTree=100):
-    ## Settings of random forests regressor
-    regModel = RandomForestRegressor(n_estimators=nTree, max_features=maxFeatures)    
-    ## Train the random forests regressor
+def randomForest(
+    trainFeatures: np.ndarray,
+    trainResponses: np.ndarray,
+    testFeatures: np.ndarray,
+    maxFeatures: int | str = "log2",
+    nTree: int = 100,
+) -> np.ndarray:
+    """Train a Random Forest regressor and return predictions for the test set."""
+    regModel = RandomForestRegressor(n_estimators=nTree, max_features=maxFeatures)
     regModel.fit(trainFeatures, trainResponses)
-    ## Prediction
-    testResponsesPred = regModel.predict(testFeatures)
-    return testResponsesPred
-
-
-# In[8]:
-
-
-def keras_nn(trainFeatures, trainResponses, testFeatures, Nepochs = 100):
-    
-    '''
-    This function is to construct neural network based on the training data and predict the 
-    response given test data.
-    Two hidded layers are used, the number of neurals are 64 and 32, respectively.
-    '''
+    return regModel.predict(testFeatures)
+def keras_nn(
+    trainFeatures: np.ndarray,
+    trainResponses: np.ndarray,
+    testFeatures: np.ndarray,
+    Nepochs: int = 100,
+) -> np.ndarray:
+    """Train a feed-forward neural network using Keras.
+    Raises
+    ------
+    RuntimeError
+        If the optional Keras dependency is not available.
+    """
+     if Sequential is None or Dense is None:  # pragma: no cover - requires keras
+        raise RuntimeError(
+            "Keras is not available. Install tensorflow/keras to use the neural "
+            "network workflow."
+        )
     model = Sequential()
-    # The first hidder layer of NN
-    model.add(Dense(64, input_dim=trainFeatures.shape[1], activation='relu'))
-    # The second hidder layer of NN
-    model.add(Dense(32, activation='relu'))
-    model.add(Dense(2, activation='tanh'))
-    model.compile(loss='mean_squared_error', optimizer='adam')
-    # Training
+    model.add(Dense(64, input_dim=trainFeatures.shape[1], activation="relu"))
+    model.add(Dense(32, activation="relu"))
+    model.add(Dense(2, activation="tanh"))
+    model.compile(loss="mean_squared_error", optimizer="adam")
     model.fit(trainFeatures, trainResponses, epochs=Nepochs, batch_size=200, verbose=0)
-    # Prediction
-    testResponsesPred = model.predict(testFeatures)
-    return testResponsesPred
+    return model.predict(testFeatures)
+
+def plotXiEta(
+    XiEta_RANS: np.ndarray,
+    testResponses: np.ndarray,
+    testResponsesPred: np.ndarray,
+    name: str,
+    symbol: str = "r^",
+    *,
+    interval: int = 2,
+) -> None:
+    """Plot Reynolds stress anisotropy in the barycentric triangle."""
 
 
-# In[61]:
 
-
-def plotXiEta(XiEta_RANS, testResponses, testResponsesPred, name, symbol='r^'):
-    # Reconstruct Barycentric coordinates
     XiEta_DNS = XiEta_RANS + testResponses
     XiEta_ML = XiEta_RANS + testResponsesPred
-    # Plot Reynolds stress anisotropy in Barycentric triangle
-    interval = 2
+
     pointsNum = int(XiEta_RANS.shape[0])
     plt.figure()
-    plt.plot([0,1,0.5,0.5,0],[0,0,3**0.5/2.0,3**0.5/2.0,0],'g-')
-    p1, = plt.plot(XiEta_RANS[:pointsNum:interval,0],XiEta_RANS[:pointsNum:interval,1],
-                   'bo', markerfacecolor='none', markeredgecolor='b',
-                   markeredgewidth=2, markersize=10)
-    p2, = plt.plot(XiEta_DNS[:pointsNum:interval,0],XiEta_DNS[:pointsNum:interval,1],
-                   'ks', markerfacecolor='none', markeredgecolor='k',
-                   markeredgewidth=2, markersize=10)
-    p3, = plt.plot(XiEta_ML[:pointsNum:interval,0],XiEta_ML[:pointsNum:interval,1],
-                   symbol, markerfacecolor='none', #markeredgecolor='r',
-                   markeredgewidth=2, markersize=10)
-    lg = plt.legend([p1,p2,p3], ['RANS', 'DNS', name], loc = 0)
+       plt.plot([0, 1, 0.5, 0.5, 0], [0, 0, 3**0.5 / 2.0, 3**0.5 / 2.0, 0], "g-")
+    p1, = plt.plot(
+        XiEta_RANS[:pointsNum:interval, 0],
+        XiEta_RANS[:pointsNum:interval, 1],
+        "bo",
+        markerfacecolor="none",
+        markeredgecolor="b",
+        markeredgewidth=2,
+        markersize=10,
+    )
+    p2, = plt.plot(
+        XiEta_DNS[:pointsNum:interval, 0],
+        XiEta_DNS[:pointsNum:interval, 1],
+        "ks",
+        markerfacecolor="none",
+        markeredgecolor="k",
+        markeredgewidth=2,
+        markersize=10,
+    )
+    p3, = plt.plot(
+        XiEta_ML[:pointsNum:interval, 0],
+        XiEta_ML[:pointsNum:interval, 1],
+        symbol,
+        markerfacecolor="none",
+        markeredgecolor="r",
+        markeredgewidth=2,
+        markersize=10,
+    )
+    lg = plt.legend([p1, p2, p3], ["RANS", "DNS", name], loc=0)
     lg.draw_frame(False)
-    plt.ylim([0,3**0.5/2.0])
-    plt.show()
+    plt.ylim([0, 3**0.5 / 2.0])
 
 
-# In[62]:
 
 
 def comparePlotRFNN(XiEta_RANS, testResponses, testResponsesPred_RF, testResponsesPred_NN):
@@ -198,108 +189,121 @@ def comparePlotRFNN(XiEta_RANS, testResponses, testResponsesPred_RF, testRespons
     plt.show()
 
 
-# In[63]:
-
-
-def iterateLines(dataFolderRANS, testResponses, testResponsesPred, name, symbol='r^'):
-    # Start index of different sample lines
+def iterateLines(
+    dataFolderRANS: Path | str,
+    testResponses: np.ndarray,
+    testResponsesPred: np.ndarray,
+    name: str,
+    symbol: str = "r^",
+    lines: Iterable[int] = (3, 5),
+) -> None:
+    """Iterate over sampling lines and plot barycentric coordinates."""
+    dataFolder = Path(dataFolderRANS)
     indexList = [0, 98, 191, 287, 385, 483, 581, 679, 777, 875, 971]
-    # Make plots at x=2 and x=4
-    for iterN in [3,5]:
-        XiEta = np.loadtxt(dataFolderRANS + 'line' + str(iterN) + '_XiEta.xy')
-        startIndex = indexList[iterN-1]
+    for iterN in lines:
+        XiEta = _load_matrix(dataFolder / f"line{iterN}_XiEta.xy")
+        startIndex = indexList[iterN - 1]
         endIndex = indexList[iterN]
-        plotXiEta(XiEta, testResponses[startIndex:endIndex,:], 
-                         testResponsesPred[startIndex:endIndex,:], name, symbol)
-    #plt.show()
+        
+    plotXiEta(
+            XiEta,
+            testResponses[startIndex:endIndex, :],
+            testResponsesPred[startIndex:endIndex, :],
+            name,
+            symbol=symbol,
+        )
 
 
-# In[64]:
+def compareResults(
+    dataFolderRANS: Path | str,
+    testResponses: np.ndarray,
+    testResponsesPred_RF: np.ndarray,
+    testResponsesPred_NN: np.ndarray,
+    lines: Iterable[int] = (3, 5),
+) -> None:
+    """Compare Random Forest and Neural Network predictions for the specified lines."""
 
-
-def compareResults(dataFolderRANS, testResponses, testResponsesPred_RF, testResponsesPred_NN):
-    ## compare the results in one plot
-    # Start index of different sample lines
+    dataFolder = Path(dataFolderRANS)
     indexList = [0, 98, 191, 287, 385, 483, 581, 679, 777, 875, 971]
-    # Make plots at x=2 and x=4
-    for iterN in [3,5]:
-        XiEta = np.loadtxt(dataFolderRANS + 'line' + str(iterN) + '_XiEta.xy')
-        startIndex = indexList[iterN-1]
+    for iterN in lines:
+        XiEta = _load_matrix(dataFolder / f"line{iterN}_XiEta.xy")
+        startIndex = indexList[iterN - 1]
         endIndex = indexList[iterN]
-        comparePlotRFNN(XiEta, testResponses[startIndex:endIndex,:], 
-                    testResponsesPred_RF[startIndex:endIndex,:], 
-                    testResponsesPred_NN[startIndex:endIndex,:])
+        comparePlotRFNN(
+            XiEta,
+            testResponses[startIndex:endIndex, :],
+            testResponsesPred_RF[startIndex:endIndex, :],
+            testResponsesPred_NN[startIndex:endIndex, :],
+        )
 
 
-# Now, plot the anisotropy at the two locations $x/H = 2$ and 4:
+def show_algorithm_diagrams() -> None:
+    """Display algorithm diagrams when running inside IPython."""
 
-# In[65]:
+    if Image is None:  # pragma: no cover - requires IPython
+        return
+        Image(filename=str(FIGURES_ROOT / "PIML-algorithm.png"))
+        Image(filename=str(FIGURES_ROOT / "features.png"))
+
+def main() -> None:
+    """Execute the default regression workflow used in the tutorials."""
+
+    show_algorithm_diagrams()
+    trainFeatures, trainResponses = loadTrainingData("pehill", "Re5600")
+    testFeatures, testResponses = loadTestData("pehill", "Re10595")
+
+    time_begin_RF = time.time()
+    testResponsesPred_RF = randomForest(
+        trainFeatures, trainResponses, testFeatures, maxFeatures=6, nTree=100
+    )
+    time_end_RF = time.time()
+     dataFolderRANS = DATABASE_ROOT / "pehill" / "XiEta-RANS" / "Re10595"
+    iterateLines(dataFolderRANS, testResponses, testResponsesPred_RF, name="RF")
+    plt.show()
+
+    Nepochs = 1000
+    testResponsesPred_NN = None
+    time_begin_NN = None
+    time_end_NN = None
+
+    if Sequential is not None and Dense is not None:
+        time_begin_NN = time.time()
+        testResponsesPred_NN = keras_nn(
+            trainFeatures, trainResponses, testFeatures, Nepochs
+        )
+        time_end_NN = time.time()
+
+        iterateLines(
+            dataFolderRANS,
+            testResponses,
+            testResponsesPred_NN,
+            name="NN",
+            symbol="m+",
+        )
+        plt.show()
+
+        compareResults(
+            dataFolderRANS, testResponses, testResponsesPred_RF, testResponsesPred_NN
+        )
+        plt.show()
+
+    cost_time_RF = time_end_RF - time_begin_RF
+    print(f"Random Forest runtime: {cost_time_RF:.3f} s")
+
+    if testResponsesPred_NN is not None and time_begin_NN is not None:
+        cost_time_NN = time_end_NN - time_begin_NN  # type: ignore[arg-type]
+        xlabel = np.arange(2)
+        plt.bar(xlabel, [cost_time_RF, cost_time_NN], 0.4)
+        plt.ylabel("CPU time (sec)")
+        plt.xticks(xlabel, ("RF", "NN"))
+        plt.title(f"Epoches = {Nepochs}")
+        plt.show()
+    else:
+        print(
+            "Keras/TensorFlow not available - skipping neural network workflow "
+            "and runtime comparison."
+        )
 
 
-Image(filename='figs/locations.png')
-
-
-# In[66]:
-
-
-# if __name__== "__main__":
-    # Load data
-trainFeatures, trainResponses = loadTrainingData('pehill', 'Re5600')
-testFeatures, testResponses = loadTestData('pehill', 'Re10595')
-time_begin_RF = time.time()
-# Make prediction via the random forest regressor
-testResponsesPred_RF = randomForest(trainFeatures, trainResponses, testFeatures, 6, 100)
-time_end_RF = time.time()
-# Make plots of Reynolds stress anisotropy
-dataFolderRANS = './database/pehill/XiEta-RANS/Re10595/'
-iterateLines(dataFolderRANS, testResponses, testResponsesPred_RF, name='RF')
-plt.show()
-
-
-# In[67]:
-
-
-Nepochs = 1000
-time_begin_NN = time.time()
-# Make prediction via the neural network
-testResponsesPred_NN = keras_nn(trainFeatures, trainResponses, testFeatures, Nepochs)
-time_end_NN = time.time()
-
-
-# ### Make plots of Reynolds stress anisotropy (NN results)
-
-# In[72]:
-
-
-dataFolderRANS = './database/pehill/XiEta-RANS/Re10595/'
-symbol = 'g+'
-iterateLines(dataFolderRANS, testResponses, testResponsesPred_NN, name='NN', symbol='m+')
-plt.show()
-
-
-# ## Compare the results of random forest and neural network
-
-# In[73]:
-
-
-compareResults(dataFolderRANS, testResponses, testResponsesPred_RF, testResponsesPred_NN)
-plt.show()
-
-
-# ## Comparison of computational cost between RF and NN
-# 
-# The cost depends on the number of epoches, which is written in the title of the plot.
-
-# In[74]:
-
-
-cost_time_RF = time_end_RF - time_begin_RF
-cost_time_NN = time_end_NN - time_begin_NN
-
-xlabel = np.arange(2)
-plt.bar(xlabel, [cost_time_RF, cost_time_NN], 0.4)
-plt.ylabel('CPU time (sec')
-plt.xticks(xlabel, ('RF', 'NN'))
-plt.title('Epoches = ' + str(Nepochs))
-plt.show()
-
+if __name__ == "__main__":
+    main()
