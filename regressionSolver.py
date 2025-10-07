@@ -83,6 +83,8 @@ def randomForest(
     regModel = RandomForestRegressor(n_estimators=nTree, max_features=maxFeatures)
     regModel.fit(trainFeatures, trainResponses)
     return regModel.predict(testFeatures)
+
+
 def keras_nn(
     trainFeatures: np.ndarray,
     trainResponses: np.ndarray,
@@ -95,7 +97,7 @@ def keras_nn(
     RuntimeError
         If the optional Keras dependency is not available.
     """
-     if Sequential is None or Dense is None:  # pragma: no cover - requires keras
+    if Sequential is None or Dense is None:  # pragma: no cover - requires keras
         raise RuntimeError(
             "Keras is not available. Install tensorflow/keras to use the neural "
             "network workflow."
@@ -119,14 +121,12 @@ def plotXiEta(
 ) -> None:
     """Plot Reynolds stress anisotropy in the barycentric triangle."""
 
-
-
     XiEta_DNS = XiEta_RANS + testResponses
     XiEta_ML = XiEta_RANS + testResponsesPred
 
     pointsNum = int(XiEta_RANS.shape[0])
     plt.figure()
-       plt.plot([0, 1, 0.5, 0.5, 0], [0, 0, 3**0.5 / 2.0, 3**0.5 / 2.0, 0], "g-")
+    plt.plot([0, 1, 0.5, 0.5, 0], [0, 0, 3**0.5 / 2.0, 3**0.5 / 2.0, 0], "g-")
     p1, = plt.plot(
         XiEta_RANS[:pointsNum:interval, 0],
         XiEta_RANS[:pointsNum:interval, 1],
@@ -159,33 +159,63 @@ def plotXiEta(
     plt.ylim([0, 3**0.5 / 2.0])
 
 
+def comparePlotRFNN(
+    XiEta_RANS: np.ndarray,
+    testResponses: np.ndarray,
+    testResponsesPred_RF: np.ndarray,
+    testResponsesPred_NN: np.ndarray,
+    *,
+    interval: int = 2,
+) -> None:
+    """Compare Random Forest and Neural Network predictions graphically."""
 
-
-def comparePlotRFNN(XiEta_RANS, testResponses, testResponsesPred_RF, testResponsesPred_NN):
     
     XiEta_DNS = XiEta_RANS + testResponses
     XiEta_RF = XiEta_RANS + testResponsesPred_RF
     XiEta_NN = XiEta_RANS + testResponsesPred_NN
-    # Plot Reynolds stress anisotropy in Barycentric triangle
-    interval = 2
+
     pointsNum = int(XiEta_RANS.shape[0])
     plt.figure()
-    plt.plot([0,1,0.5,0.5,0],[0,0,3**0.5/2.0,3**0.5/2.0,0],'g-')
-    p1, = plt.plot(XiEta_RANS[:pointsNum:interval,0],XiEta_RANS[:pointsNum:interval,1],
-                   'bo', markerfacecolor='none', markeredgecolor='b',
-                   markeredgewidth=1.5, markersize=8)
-    p2, = plt.plot(XiEta_DNS[:pointsNum:interval,0],XiEta_DNS[:pointsNum:interval,1],
-                   'ks', markerfacecolor='none', markeredgecolor='k',
-                   markeredgewidth=1.5, markersize=8)
-    p3, = plt.plot(XiEta_RF[:pointsNum:interval,0],XiEta_RF[:pointsNum:interval,1],
-                   'r^', markerfacecolor='none', markeredgecolor='r',
-                   markeredgewidth=1.5, markersize=8)
-    p4, = plt.plot(XiEta_NN[:pointsNum:interval,0],XiEta_NN[:pointsNum:interval,1],
-                   'r+', markerfacecolor='none', markeredgecolor='g',
-                   markeredgewidth=1.5, markersize=8)
-    lg = plt.legend([p1,p2,p3, p4], ['RANS', 'DNS', 'RF', 'NN'], loc = 0)
+    plt.plot([0, 1, 0.5, 0.5, 0], [0, 0, 3**0.5 / 2.0, 3**0.5 / 2.0, 0], "g-")
+    p1, = plt.plot(
+        XiEta_RANS[:pointsNum:interval, 0],
+        XiEta_RANS[:pointsNum:interval, 1],
+        "bo",
+        markerfacecolor="none",
+        markeredgecolor="b",
+        markeredgewidth=1.5,
+        markersize=8,
+    )
+    p2, = plt.plot(
+        XiEta_DNS[:pointsNum:interval, 0],
+        XiEta_DNS[:pointsNum:interval, 1],
+        "ks",
+        markerfacecolor="none",
+        markeredgecolor="k",
+        markeredgewidth=1.5,
+        markersize=8,
+    )
+    p3, = plt.plot(
+        XiEta_RF[:pointsNum:interval, 0],
+        XiEta_RF[:pointsNum:interval, 1],
+        "r^",
+        markerfacecolor="none",
+        markeredgecolor="r",
+        markeredgewidth=1.5,
+        markersize=8,
+    )
+    p4, = plt.plot(
+        XiEta_NN[:pointsNum:interval, 0],
+        XiEta_NN[:pointsNum:interval, 1],
+        "r+",
+        markerfacecolor="none",
+        markeredgecolor="g",
+        markeredgewidth=1.5,
+        markersize=8,
+    )
+    lg = plt.legend([p1, p2, p3, p4], ["RANS", "DNS", "RF", "NN"], loc=0)
     lg.draw_frame(False)
-    plt.ylim([0,3**0.5/2.0])
+    plt.ylim([0, 3**0.5 / 2.0])
     plt.show()
 
 
@@ -205,7 +235,7 @@ def iterateLines(
         startIndex = indexList[iterN - 1]
         endIndex = indexList[iterN]
         
-    plotXiEta(
+        plotXiEta(
             XiEta,
             testResponses[startIndex:endIndex, :],
             testResponsesPred[startIndex:endIndex, :],
@@ -242,8 +272,8 @@ def show_algorithm_diagrams() -> None:
 
     if Image is None:  # pragma: no cover - requires IPython
         return
-        Image(filename=str(FIGURES_ROOT / "PIML-algorithm.png"))
-        Image(filename=str(FIGURES_ROOT / "features.png"))
+    Image(filename=str(FIGURES_ROOT / "PIML-algorithm.png"))
+    Image(filename=str(FIGURES_ROOT / "features.png"))
 
 def main() -> None:
     """Execute the default regression workflow used in the tutorials."""
@@ -257,7 +287,7 @@ def main() -> None:
         trainFeatures, trainResponses, testFeatures, maxFeatures=6, nTree=100
     )
     time_end_RF = time.time()
-     dataFolderRANS = DATABASE_ROOT / "pehill" / "XiEta-RANS" / "Re10595"
+    dataFolderRANS = DATABASE_ROOT / "pehill" / "XiEta-RANS" / "Re10595"
     iterateLines(dataFolderRANS, testResponses, testResponsesPred_RF, name="RF")
     plt.show()
 
